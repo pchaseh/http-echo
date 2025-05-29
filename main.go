@@ -8,6 +8,8 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"golang.org/x/sys/unix"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -22,11 +24,36 @@ var (
 	textFlag    = flag.String("text", "", "text to put on the webpage")
 	versionFlag = flag.Bool("version", false, "display version information")
 	statusFlag  = flag.Int("status-code", 200, "http response code, e.g.: 200")
+	transparentFlag = flag.Bool("transparent", false, "set the IP_TRANSPARENT option on the listening socket")
 
 	// stdoutW and stderrW are for overriding in test.
 	stdoutW = os.Stdout
 	stderrW = os.Stderr
 )
+
+type listenerOpts struct {
+	transparent bool
+}
+
+func createListener(addr string, opts listenerOpts) (net.Listener, error) {
+	lc := net.ListenConfig{
+		Control: func(network, address string, c syscall.RawConn) error {
+			var sockErr error
+
+			if opts.transparent {
+				err := c.Control(func(fd uintptr) {
+					sockErr = unix.SetsockoptInt(int(fd), unix.SOL_IP, unix.IP_TRANSPARENT, 1)
+				})
+				if err != nil {
+					return err
+				}
+			}
+			return sockErr
+		},
+	}
+	return lc.Listen(context.Background(), "tcp", addr)
+}
+
 
 func main() {
 	flag.Parse()
@@ -67,9 +94,19 @@ func main() {
 		Handler: mux,
 	}
 	serverCh := make(chan struct{})
+
+	listenOpts := listenerOpts {
+		transparent: *transparentFlag,
+	}
+	listener, err := createListener(*listenFlag, listenOpts)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to create listener: %v\n", err)
+		os.Exit(1)
+	}
+
 	go func() {
 		log.Printf("[INFO] server is listening on %s\n", *listenFlag)
-		if err := server.ListenAndServe(); err != http.ErrServerClosed {
+		if err := server.Serve(listener); err != http.ErrServerClosed {
 			log.Fatalf("[ERR] server exited with: %s", err)
 		}
 		close(serverCh)

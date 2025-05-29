@@ -1,5 +1,7 @@
 module github.com/hashicorp/http-echo
 
-go 1.21.0
+go 1.23.0
 
-toolchain go1.21.1
+toolchain go1.24.3
+
+require golang.org/x/sys v0.33.0 // indirect
